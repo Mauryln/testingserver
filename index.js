@@ -6,6 +6,7 @@ const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
 const app = express();
+const port = process.env.PORT || 3000;
 
 // Middleware - Habilitar CORS para todos los orígenes (para probar)
 app.use(cors({
@@ -323,4 +324,6 @@ app.get('/reports/:userId/:labelId/messages', async (req, res) => {
 
 
 
-  console.log(`🚀 Servidor esta listo`)
+app.listen(PORT, () => {
+  console.log(`Servidor escuchando en el puerto ${PORT}`);
+});
