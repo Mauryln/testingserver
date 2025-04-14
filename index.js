@@ -6,25 +6,16 @@ const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
 const app = express();
-const PORT = 3000;
+//const PORT = process.env.PORT || 3000;
 
-// Middlewares - Configuración CORS unificada
-const allowedOrigins = ['https://testingserver-iyng.onrender.com', 'chrome-extension://pdmanenfgbafbjfjpdmlodmbpnigckph'];
-
-const corsOptions = {
-  origin: function(origin, callback) {
-    if (allowedOrigins.indexOf(origin) !== -1 || !origin) {
-      callback(null, true);
-    } else {
-      callback(new Error('No permitido por CORS'));
-    }
-  },
+// Middleware - Habilitar CORS para todos los orígenes (para probar)
+app.use(cors({
+  origin: '*',  // Esto permite solicitudes desde cualquier origen
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type'],
   credentials: true
-};
+}));
 
-app.use(cors(corsOptions));
 app.use(express.json());
 app.use(fileUpload());
 
@@ -32,23 +23,20 @@ app.use(fileUpload());
 const clients = {};
 const qrCodes = {};
 
-// Ruta para iniciar una nueva sesión
+// Rutas y lógica para manejar la sesión
 app.post('/start-session', async (req, res) => {
   try {
     const { userId } = req.body;
-    // Validar si ya existe una sesión para este usuario
     if (clients[userId] && clients[userId].isReady) {
       return res.status(400).json({ 
         success: false, 
         error: 'Ya existe una sesión activa para este usuario' 
       });
     }
-    // Si hay un cliente previo pero no está listo, lo destruimos
     if (clients[userId]) {
       await clients[userId].destroy();
       delete clients[userId];
     }
-    // Crear nuevo cliente
     const client = new Client({
       authStrategy: new LocalAuth({ clientId: userId }),
       puppeteer: {
@@ -66,32 +54,36 @@ app.post('/start-session', async (req, res) => {
         ],
         executablePath: process.env.CHROME_PATH,
         ignoreHTTPSErrors: true,
-        defaultViewport: {width: 1280, height: 800}
+        defaultViewport: { width: 1280, height: 800 }
       }
     });
-    // Configurar eventos
+
     client.on('qr', qr => {
       console.log(`📱 QR Code generado para usuario ${userId}`);
       qrCodes[userId] = qr;
     });
+
     client.on('ready', () => {
       console.log(`✅ Cliente WhatsApp listo para usuario ${userId}`);
       client.isReady = true;
-      // Limpiamos el QR code cuando ya está autenticado
-      delete qrCodes[userId];
+      delete qrCodes[userId];  // Limpiar QR cuando esté listo
     });
+
     client.on('auth_failure', msg => {
       console.error(`❌ Fallo de autenticación para usuario ${userId}:`, msg);
     });
+
     client.on('disconnected', reason => {
       console.warn(`🔌 Cliente desconectado para usuario ${userId}:`, reason);
       client.isReady = false;
     });
+
     clients[userId] = client;
     client.initialize();
-    return res.json({ 
-      success: true, 
-      message: 'Iniciando sesión, solicita el código QR' 
+
+    return res.json({
+      success: true,
+      message: 'Iniciando sesión, solicita el código QR'
     });
   } catch (error) {
     console.error('❌ Error al iniciar sesión:', error.message);
@@ -332,5 +324,5 @@ app.get('/reports/:userId/:labelId/messages', async (req, res) => {
 
 
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor escuchando en ${PORT}`);
+  console.log(`🚀 Servidor esta listo`);
 });
