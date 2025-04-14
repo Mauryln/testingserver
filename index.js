@@ -324,6 +324,6 @@ app.get('/reports/:userId/:labelId/messages', async (req, res) => {
 
 
 
-app.listen(PORT, () => {
-  console.log(`Servidor escuchando en el puerto ${PORT}`);
+app.listen(port, () => {
+  console.log(`Servidor escuchando en el puerto ${port}`);
 });
