@@ -9,12 +9,21 @@ const app = express();
 const PORT = 3000;
 
 // Middlewares - Configuración CORS unificada
+const allowedOrigins = ['https://testingserver-iyng.onrender.com', 'chrome-extension://pdmanenfgbafbjfjpdmlodmbpnigckph'];
+
 const corsOptions = {
-  origin: '*',
+  origin: function(origin, callback) {
+    if (allowedOrigins.indexOf(origin) !== -1 || !origin) {
+      callback(null, true);
+    } else {
+      callback(new Error('No permitido por CORS'));
+    }
+  },
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type'],
   credentials: true
 };
+
 app.use(cors(corsOptions));
 app.use(express.json());
 app.use(fileUpload());
