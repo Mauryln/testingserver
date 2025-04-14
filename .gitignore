@@ -1,0 +1,13 @@
+# Ignorar node_modules y archivos temporales
+node_modules/
+.wwebjs_auth/
+.wwebjs_cache/
+.DS_Store
+*.log
+
+# Ignorar archivos de sesión de Chrome
+IndexedDB/
+Service Worker/
+Local Storage/
+Session Storage/
+shared_proto_db/
