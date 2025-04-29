@@ -8,11 +8,22 @@ const path = require('path');
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Middleware - Habilitar CORS para todos los orígenes (para probar)
+// Limpiar archivos de autenticación al iniciar
+const authDir = path.join(__dirname, '.wwebjs_auth');
+if (fs.existsSync(authDir)) {
+  try {
+    fs.rmSync(authDir, { recursive: true, force: true });
+    console.log('🧹 Archivos de autenticación anteriores eliminados');
+  } catch (error) {
+    console.error('❌ Error al limpiar archivos de autenticación:', error);
+  }
+}
+
+// Middleware - Configuración CORS
 app.use(cors({
-  origin: '*',  // Esto permite solicitudes desde cualquier origen
+  origin: ['chrome-extension://dnblhcngpajdonchphgokjgcgapocjld', 'http://localhost:3000'],
   methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type'],
+  allowedHeaders: ['Content-Type', 'Cache-Control', 'Pragma'],
   credentials: true
 }));
 
@@ -23,20 +34,42 @@ app.use(fileUpload());
 const clients = {};
 const qrCodes = {};
 
-// Rutas y lógica para manejar la sesión
+// Ruta para iniciar una nueva sesión
 app.post('/start-session', async (req, res) => {
   try {
     const { userId } = req.body;
+    
+    // Validar si ya existe una sesión para este usuario
     if (clients[userId] && clients[userId].isReady) {
       return res.status(400).json({ 
         success: false, 
         error: 'Ya existe una sesión activa para este usuario' 
       });
     }
+
+    // Si hay un cliente previo, lo destruimos y limpiamos
     if (clients[userId]) {
-      await clients[userId].destroy();
-      delete clients[userId];
+      try {
+        await clients[userId].destroy();
+      } catch (err) {
+        console.warn(`Advertencia al destruir cliente previo para ${userId}:`, err.message);
+      } finally {
+        delete clients[userId];
+        delete qrCodes[userId];
+        // Limpiar archivos de autenticación
+        const authPath = path.join(__dirname, '.wwebjs_auth', `session-${userId}`);
+        if (fs.existsSync(authPath)) {
+          try {
+            fs.rmSync(authPath, { recursive: true, force: true });
+            console.log(`🧹 Archivos de autenticación eliminados para usuario ${userId}`);
+          } catch (fsError) {
+            console.warn(`⚠️ No se pudieron eliminar todos los archivos para ${userId}:`, fsError.message);
+          }
+        }
+      }
     }
+
+    // Crear nuevo cliente
     const client = new Client({
       authStrategy: new LocalAuth({ clientId: userId }),
       puppeteer: {
@@ -54,10 +87,11 @@ app.post('/start-session', async (req, res) => {
         ],
         executablePath: process.env.CHROME_PATH,
         ignoreHTTPSErrors: true,
-        defaultViewport: { width: 1280, height: 800 }
+        defaultViewport: {width: 1280, height: 800}
       }
     });
 
+    // Configurar eventos
     client.on('qr', qr => {
       console.log(`📱 QR Code generado para usuario ${userId}`);
       qrCodes[userId] = qr;
@@ -66,24 +100,45 @@ app.post('/start-session', async (req, res) => {
     client.on('ready', () => {
       console.log(`✅ Cliente WhatsApp listo para usuario ${userId}`);
       client.isReady = true;
-      delete qrCodes[userId];  // Limpiar QR cuando esté listo
+      // Limpiamos el QR code cuando ya está autenticado
+      delete qrCodes[userId];
     });
 
     client.on('auth_failure', msg => {
       console.error(`❌ Fallo de autenticación para usuario ${userId}:`, msg);
+      // Limpiar archivos de autenticación en caso de fallo
+      const authPath = path.join(__dirname, '.wwebjs_auth', `session-${userId}`);
+      if (fs.existsSync(authPath)) {
+        try {
+          fs.rmSync(authPath, { recursive: true, force: true });
+          console.log(`🧹 Archivos de autenticación eliminados por fallo para usuario ${userId}`);
+        } catch (fsError) {
+          console.warn(`⚠️ No se pudieron eliminar archivos por fallo para ${userId}:`, fsError.message);
+        }
+      }
     });
 
     client.on('disconnected', reason => {
       console.warn(`🔌 Cliente desconectado para usuario ${userId}:`, reason);
       client.isReady = false;
+      // Limpiar archivos de autenticación al desconectar
+      const authPath = path.join(__dirname, '.wwebjs_auth', `session-${userId}`);
+      if (fs.existsSync(authPath)) {
+        try {
+          fs.rmSync(authPath, { recursive: true, force: true });
+          console.log(`🧹 Archivos de autenticación eliminados por desconexión para usuario ${userId}`);
+        } catch (fsError) {
+          console.warn(`⚠️ No se pudieron eliminar archivos por desconexión para ${userId}:`, fsError.message);
+        }
+      }
     });
 
     clients[userId] = client;
     client.initialize();
 
-    return res.json({
-      success: true,
-      message: 'Iniciando sesión, solicita el código QR'
+    return res.json({ 
+      success: true, 
+      message: 'Iniciando sesión, solicita el código QR' 
     });
   } catch (error) {
     console.error('❌ Error al iniciar sesión:', error.message);
@@ -91,6 +146,7 @@ app.post('/start-session', async (req, res) => {
   }
 });
 
+// Ruta para obtener el código QR
 app.get('/get-qr/:userId', (req, res) => {
   const { userId } = req.params;
   if (!clients[userId]) {
@@ -111,6 +167,7 @@ app.get('/get-qr/:userId', (req, res) => {
   });
 });
 
+// Ruta para verificar el estado de la sesión
 app.get('/session-status/:userId', (req, res) => {
   const { userId } = req.params;
   if (!clients[userId]) {
@@ -137,6 +194,7 @@ app.get('/session-status/:userId', (req, res) => {
   }
 });
 
+// Ruta para cerrar sesión
 app.post('/close-session', async (req, res) => {
   try {
     const { userId } = req.body;
@@ -147,18 +205,28 @@ app.post('/close-session', async (req, res) => {
         error: 'No existe una sesión para este usuario' 
       });
     }
+
+    const client = clients[userId];
+    
     try {
-      await clients[userId].destroy();
+      // Verificar si el cliente está listo antes de intentar destruirlo
+      if (client.isReady) {
+        await client.destroy();
+      }
     } catch (err) {
       console.warn(`Advertencia al destruir cliente para ${userId}:`, err.message);
+    } finally {
+      // Limpiar siempre los datos del cliente
+      delete clients[userId];
+      delete qrCodes[userId];
     }
     
-    delete clients[userId];
-    delete qrCodes[userId];
     res.json({ 
       success: true, 
       message: 'Sesión cerrada correctamente' 
     });
+
+    // Limpiar archivos de autenticación después de un tiempo
     try {
       const authPath = path.join(__dirname, '.wwebjs_auth', `session-${userId}`);
       setTimeout(() => {
@@ -181,6 +249,85 @@ app.post('/close-session', async (req, res) => {
   }
 });
 
+// Ruta para obtener los grupos del usuario
+app.get('/groups/:userId', async (req, res) => {
+  const { userId } = req.params;
+  const client = clients[userId];
+
+  if (!client || !client.isReady) {
+    return res.status(400).json({ success: false, error: 'Sesión no activa' });
+  }
+
+  try {
+    const chats = await client.getChats();
+    const groups = chats.filter(chat => chat.isGroup);
+    
+    const formattedGroups = await Promise.all(groups.map(async (group) => {
+      const participants = await group.participants;
+      return {
+        id: group.id._serialized,
+        name: group.name,
+        participants: participants.length
+      };
+    }));
+
+    return res.json({ success: true, groups: formattedGroups });
+  } catch (error) {
+    console.error("Error al obtener grupos:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Ruta para obtener los participantes de un grupo
+app.get('/groups/:userId/:groupId/participants', async (req, res) => {
+  const { userId, groupId } = req.params;
+  const client = clients[userId];
+
+  if (!client || !client.isReady) {
+    return res.status(400).json({ success: false, error: 'Sesión no activa' });
+  }
+
+  try {
+    const chat = await client.getChatById(groupId);
+    if (!chat || !chat.isGroup) {
+      return res.status(404).json({ success: false, error: 'Grupo no encontrado' });
+    }
+
+    const participants = await chat.participants;
+    const numbers = new Set();
+
+    // Obtener los números de los participantes
+    for (const participant of participants) {
+      try {
+        // Obtener el contacto completo
+        const contact = await client.getContactById(participant.id._serialized);
+        if (contact) {
+          // Intentar obtener el número del título
+          const title = contact.name || contact.pushname || '';
+          if (title) {
+            // Extraer números del título
+            const matches = title.match(/\+?\d{7,15}/g);
+            if (matches) {
+              matches.forEach(num => {
+                const formattedNumber = num.startsWith('+') ? num : `+${num}`;
+                numbers.add(formattedNumber);
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn(`No se pudo obtener el número para el participante:`, err.message);
+      }
+    }
+
+    return res.json({ success: true, numbers: Array.from(numbers) });
+  } catch (error) {
+    console.error("Error al obtener participantes:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Ruta para enviar mensajes
 app.post('/send-messages', async (req, res) => {
   try {
     const { userId, delay } = req.body;
@@ -257,7 +404,7 @@ app.post('/send-messages', async (req, res) => {
   }
 });
 
-
+// Ruta para obtener etiquetas
 app.get('/labels/:userId', async (req, res) => {
   const { userId } = req.params;
   const client = clients[userId];
@@ -272,6 +419,7 @@ app.get('/labels/:userId', async (req, res) => {
   }
 });
 
+// Ruta para obtener chats por etiqueta
 app.get('/labels/:userId/:labelId/chats', async (req, res) => {
   const { userId, labelId } = req.params;
   const client = clients[userId];
@@ -287,6 +435,7 @@ app.get('/labels/:userId/:labelId/chats', async (req, res) => {
   }
 });
 
+// Ruta para obtener mensajes para reportes
 app.get('/reports/:userId/:labelId/messages', async (req, res) => {
   const { userId, labelId } = req.params;
   const client = clients[userId];
@@ -322,8 +471,6 @@ app.get('/reports/:userId/:labelId/messages', async (req, res) => {
   }
 });
 
-
-
 app.listen(port, () => {
-  console.log(`Servidor escuchando en el puerto ${port}`);
+  console.log(`🚀 Servidor escuchando en http://localhost:${port}`);
 });

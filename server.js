@@ -10,9 +10,9 @@ const PORT = 3000;
 
 // Middlewares - Configuración CORS unificada
 const corsOptions = {
-  origin: '*',
+  origin: ['chrome-extension://dnblhcngpajdonchphgokjgcgapocjld', 'http://localhost:3000'],
   methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type'],
+  allowedHeaders: ['Content-Type', 'Cache-Control', 'Pragma'],
   credentials: true
 };
 app.use(cors(corsOptions));
@@ -321,6 +321,59 @@ app.get('/reports/:userId/:labelId/messages', async (req, res) => {
   }
 });
 
+// Ruta para obtener los grupos del usuario
+app.get('/groups/:userId', async (req, res) => {
+  const { userId } = req.params;
+  const client = clients[userId];
+
+  if (!client || !client.isReady) {
+    return res.status(400).json({ success: false, error: 'Sesión no activa' });
+  }
+
+  try {
+    const chats = await client.getChats();
+    const groups = chats.filter(chat => chat.isGroup);
+    
+    const formattedGroups = await Promise.all(groups.map(async (group) => {
+      const participants = await group.participants;
+      return {
+        id: group.id._serialized,
+        name: group.name,
+        participants: participants.length
+      };
+    }));
+
+    return res.json({ success: true, groups: formattedGroups });
+  } catch (error) {
+    console.error("Error al obtener grupos:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Ruta para obtener los participantes de un grupo
+app.get('/groups/:userId/:groupId/participants', async (req, res) => {
+  const { userId, groupId } = req.params;
+  const client = clients[userId];
+
+  if (!client || !client.isReady) {
+    return res.status(400).json({ success: false, error: 'Sesión no activa' });
+  }
+
+  try {
+    const chat = await client.getChatById(groupId);
+    if (!chat || !chat.isGroup) {
+      return res.status(404).json({ success: false, error: 'Grupo no encontrado' });
+    }
+
+    const participants = await chat.participants;
+    const numbers = participants.map(p => p.id.user);
+
+    return res.json({ success: true, numbers });
+  } catch (error) {
+    console.error("Error al obtener participantes:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`🚀 Servidor escuchando en http://localhost:${PORT}`);
